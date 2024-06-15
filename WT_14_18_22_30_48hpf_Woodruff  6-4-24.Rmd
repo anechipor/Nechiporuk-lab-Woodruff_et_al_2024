@@ -1,0 +1,883 @@
+---
+title: "nechiporuk_10x_analysis"
+author: "nlc", "avn"
+date: "4/27/2020"
+output:   
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+    toc_collapsed: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, fig.align = 'center', out.width = '90%')
+```
+
+<style>
+    body .main-container {
+        max-width: 2160px;
+    }
+</style>
+
+# Set up
+
+## Load libraries
+```{r}
+library(tidyverse)
+library(Seurat)
+library(cowplot)
+library(patchwork)
+library(MAST)
+library(ggrepel)
+library(monocle3)
+library(SeuratWrappers)
+library(Matrix)
+library(pheatmap)
+library(RColorBrewer)
+
+
+
+```
+
+## Load data
+```{r}
+#14h data set - WT_1
+data_folder1 <- "WT_14h"
+WT14_data <- Read10X(data.dir = data_folder1)
+WT14 <- CreateSeuratObject(counts = WT14_data,
+                           project = "WT14", min.cells = 3, min.features = 200)
+
+#18h data set 
+data_folder2 <- "WT_18h"
+WT18_data <- Read10X(data.dir = data_folder2)
+WT18 <- CreateSeuratObject(counts = WT18_data,
+                          project = "WT18", min.cells = 3, min.features = 200)
+
+# #22h data set - WT_2
+data_folder2 <- "WT_22h"
+WT22_data <- Read10X(data.dir = data_folder2)
+WT22 <- CreateSeuratObject(counts = WT22_data,
+                           project = "WT22", min.cells = 3, min.features = 200)
+
+
+# #30h data set#1 - WT_3
+data_folder3 <- "WT30h_1"
+WT_3_data <- Read10X(data.dir = data_folder3)
+WT30_1 <- CreateSeuratObject(counts = WT_3_data,
+                           project = "WT30_1", min.cells = 3, min.features = 200)
+
+# #30h data set#2 - WT_4
+data_folder4 <- "WT30h_2"
+WT_4_data <- Read10X(data.dir = data_folder4)
+WT30_2 <- CreateSeuratObject(counts = WT_4_data,
+                           project = "WT30_2", min.cells = 3, min.features = 200)
+
+#48h data set - WT_5
+data_folder5 <- "WT48h_1"
+WT_5_data <- Read10X(data.dir = data_folder5)
+WT48 <- CreateSeuratObject(counts = WT_5_data,
+                           project = "WT48_1", min.cells = 3, min.features = 200)
+
+
+```
+
+
+```{r}
+data.combined <- merge(x = WT14, y = c(WT18, WT22, WT30_1, WT30_2, WT48), add.cell.ids = c("WT14", "WT18", "WT22", "WT30_1", "WT30_2", "WT48"), project = "data.combined")
+data.combined
+data.combined[['condition']] <- str_split(data.combined@meta.data$orig.ident, pattern = '_', simplify = TRUE)[,1]
+head(colnames(data.combined))
+table(data.combined$orig.ident)
+
+```
+
+
+# 'Standard' Seurat analysis
+
+## Assign mitochondrial percent
+
+*NOTE (NLC):* zebrafish mitochondrial genes have a lowercase prefix, using the regex pattern '^mt-' appeared to work, however only 13 mitchondrial genes are present.
+
+```{r}
+data.combined[["percent.mt"]] <- PercentageFeatureSet(data.combined, pattern = "^mt-|^COX3$")
+# Visualize QC metrics as a violin plot
+VlnPlot(data.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+
+
+```
+
+## QC visualization
+
+*Note (AN):* FeatureScatter is typically used to visualize feature-feature relationships, but can be used for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+*Note (NLC):* zebrafish mitochondrial genes have a lowercase prefix, 
+
+
+
+Run this chunk to manually set cutoffs:
+
+```{r, eval = TRUE}
+nCount_RNA_limits <- c(1e3, 7.5e4)
+
+nFeature_RNA_limits <- c(1900, 9000)
+
+percent_mt_limits <- c(0, 5)
+```
+
+
+```{r}
+
+FeatureScatter(data.combined, feature1 = "nCount_RNA", feature2 = "percent.mt", group.by = "orig.ident")+
+  geom_vline(xintercept = nCount_RNA_limits, linetype = 'dashed', size = 1.5)+
+  geom_hline(yintercept = percent_mt_limits, linetype = 'dashed', size = 1.5)
+
+FeatureScatter(data.combined, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "orig.ident")+
+  geom_vline(xintercept = nCount_RNA_limits, linetype = 'dashed', size = 1.5)+
+  geom_hline(yintercept = nFeature_RNA_limits, linetype = 'dashed', size = 1.5)
+
+data.combined_metadata <- data.combined@meta.data
+
+ggplot(data.combined_metadata, aes(x = nCount_RNA, y = nFeature_RNA))+
+  geom_point(alpha = 0.1)+
+  geom_density2d()+
+  geom_vline(xintercept = nCount_RNA_limits, linetype = 'dashed', size = 1.5)+
+  geom_hline(yintercept = nFeature_RNA_limits, linetype = 'dashed', size = 1.5)+
+  scale_x_log10()
+
+ggplot(data.combined_metadata, aes(x = nCount_RNA/nFeature_RNA, y = nFeature_RNA))+
+  geom_point(alpha = 0.1)+
+  geom_density2d()+
+  geom_hline(yintercept = nFeature_RNA_limits, linetype = 'dashed', size = 1.5)
+
+
+
+```
+
+## Subset data
+
+```{r}
+#Display counts before pruning
+print('Cell count before pruning:')
+table(data.combined@meta.data$orig.ident)
+
+data.combined <- subset(data.combined, subset = nFeature_RNA > min(nFeature_RNA_limits) & nFeature_RNA < max(nFeature_RNA_limits) & nCount_RNA > min(nCount_RNA_limits) & nCount_RNA < max(nCount_RNA_limits) & percent.mt > min(percent_mt_limits) & percent.mt < max(percent_mt_limits))
+
+#Display counts after pruning
+print('Cell count after pruning:')
+table(data.combined@meta.data$orig.ident)
+```
+
+## Ancor and normalize data
+```{r}
+data.combined.list <- SplitObject(data.combined, split.by = "orig.ident")
+
+data.combined.list <- lapply(X = data.combined.list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+anchors <- FindIntegrationAnchors(object.list = data.combined.list, dims = 1:25)
+data.combined <- IntegrateData(anchorset = anchors, dims = 1:25)
+#saveRDS(data.combined, file = "outputs/14_18_22_30_48h.rds")
+```
+
+
+## Identify variable features and scale data
+
+```{r}
+# Run the standard workflow for visualization and clustering
+#data.combined <- readRDS(file = "outputs/14_18_22_30_48h.rds")
+DefaultAssay(data.combined) <- "integrated"
+data.combined <- ScaleData(data.combined, features = row.names(data.combined), verbose = FALSE)
+data.combined <- RunPCA(data.combined, npcs = 50, verbose = FALSE)
+
+DimPlot(data.combined, reduction = 'pca')
+ElbowPlot(data.combined, ndims = 50)+
+  geom_vline(xintercept = 30.5)
+
+# t-SNE and Clustering
+data.combined <- RunUMAP(data.combined, reduction = "pca", dims = 1:40)
+data.combined <- FindNeighbors(data.combined, reduction = "pca", dims = 1:40)
+data.combined <- FindClusters(data.combined, resolution = 2)
+
+plot_14_48h <- DimPlot(data.combined, reduction = 'umap', label = T) + NoLegend()+
+  coord_equal()
+
+ggsave("outputs/plot_14_48h.jpeg", plot_14_48h, dpi = 600)
+
+DimPlot(data.combined, reduction = 'umap', group.by = 'orig.ident')+
+  coord_equal()
+
+```
+
+## color blind friendly UMAP
+```{r}
+
+my_colors <- c("5c5cc2",
+"#a6bc3a",
+"#733fa1",
+"#59c66f",
+"#b43996",
+"#7cb041",
+"#847deb",
+"#c8aa34",
+"#482070",
+"#4cbe84",
+"#d370d1",
+"#4d7f29",
+"#de4782",
+"#43c29e",
+"#9c1a54",
+"#36dee6",
+"#902a0e",
+'deepskyblue2',
+"#d28826",
+"#353f8d",
+"#9ca03c",
+"#81438d",
+"#7cbf76",
+"#6d195d",
+'darkmagenta',
+"#851657",
+"#3a8142",
+"#e66bab",
+"#255719",
+"#c08adc",
+"#dcae57",
+"#5963ad",
+"#cb692b",
+"#7199e0",
+"#d5533b",
+"#db81c4",
+"#a67724",
+"#9b4486",
+"#7b6a24",
+"#b23679",
+"#cca361",
+"#6b1b4b",
+"#dc8e5a",
+"#6f193d",
+"#d16a43",
+"#a14e7c",
+"#8d4d17",
+"#e480a8",
+"#701e0f",
+"#eb5573",
+"#74171f",
+"#e5836a",
+"#72182e",
+"#dd4e4f",
+"#b1486e",
+"#a3553a",
+"#ad264f",
+"#dd7a87",
+"#a73830",
+"#d55b75",
+"#9d323b",
+"#df6f70",
+"#a34656",
+"#c4394f")
+
+plot_14_48h <- DimPlot(data.combined, reduction = 'umap', label = F, pt.size = 0.1,  cols = my_colors) + NoLegend()
+
+ggsave("outputs/plot_14_48h.jpeg", plot_14_48h,  dpi = 600, width = 210,
+  height = 140, units = "mm")
+```
+
+
+# Directed analysis
+
+
+```{r}
+
+DefaultAssay(data.combined) <- "RNA"
+FeaturePlot(data.combined, features = c('ret', 'irx1a'), min.cutoff = 0,
+  max.cutoff = NA, order = TRUE)+
+  coord_equal()
+
+FeaturePlot(data.combined, features = c("phox2bb",
+                "mafba"), min.cutoff = 0,
+  max.cutoff = NA, order = TRUE)+
+  coord_equal()
+
+
+
+
+```
+
+
+## Look at cluster identity versus condition
+
+```{r}
+data.combined.meta <- data.combined@meta.data
+
+ggplot(data.combined.meta, aes(x = seurat_clusters, fill = orig.ident))+
+  geom_bar(position = 'dodge')
+```
+
+# Analysis of clusters
+
+## 'Automatic' subset and analysis a particular cluster
+```{r}
+
+#Set the subset cluster(s) that you're interested in
+
+subset_cluster_id <- c(17,24)
+DefaultAssay(data.combined) <- "integrated"
+##
+##The code below is designed to run automatically once the subset ids are selected above
+##
+
+print('Running automated ~analysis~ on the following clusters:')
+print(subset_cluster_id)
+
+#Pull the subset
+data.combined_subset <- subset(data.combined, subset = seurat_clusters %in% subset_cluster_id)
+#stash the original cluster identities
+data.combined_subset@meta.data$original_seurat_clusters <- data.combined_subset@meta.data$seurat_clusters
+
+#Perform relatively hands-free analysis of the selected clusters
+data.combined_subset <- FindVariableFeatures(data.combined_subset)
+data.combined_subset <- RunPCA(data.combined_subset)
+ElbowPlot(data.combined_subset)
+
+data.combined_subset <- FindNeighbors(data.combined_subset, dims = 1:10)
+data.combined_subset <- FindClusters(data.combined_subset, resolution = 0.2)
+data.combined_subset <- RunUMAP(data.combined_subset, dims = 1:10)
+
+
+DimPlot(data.combined_subset, label = TRUE, label.size = 10, repel = 0.1,  group.by = 'seurat_clusters')+
+  ggtitle('New clusters')
+subset_plot2 <- DimPlot(data.combined_subset, label = TRUE, label.size = 10, repel= 0.1, group.by = 'original_seurat_clusters')+
+  ggtitle('Original cluster identities')
+
+
+data.combined.subset.meta <- data.combined_subset@meta.data
+
+ggplot(data.combined.subset.meta, aes(x = seurat_clusters, fill = orig.ident))+
+  geom_bar(position = 'dodge')
+
+
+#Identify anterior lateral line neurons by alcama expression
+DefaultAssay(data.combined_subset) <- "RNA"
+FeaturePlot(data.combined_subset, features = c('alcama'), order = T,
+            min = 0.1,
+            pt.size = 1)+
+  coord_equal()+scale_x_reverse()
+
+#subset progenitors and posterior lateral line neurons 
+data.combined_subset2 <- subset(x = data.combined_subset, idents = c("0", "2", "3"), invert = F)
+subset2_plot <- DimPlot(data.combined_subset2, label = F, label.size = 10, repel = 0.1, pt.size = 1)+
+  coord_equal()+scale_x_reverse() + scale_color_manual(values = c('deepskyblue2','darkorange1','darkmagenta'))
+ggsave("outputs/subset2_plot.jpeg", subset2_plot, dpi = 600)
+
+subset2_plot_split <- DimPlot(data.combined_subset2, label = F, label.size = 10, repel = 0.1, pt.size = .5, split.by = "condition")+
+  coord_equal()+scale_x_reverse() + scale_color_manual(values = c('deepskyblue2','darkorange1','darkmagenta'))
+ggsave("outputs/subset2_plot_split.jpeg", subset2_plot_split, dpi = 600)
+
+#subset 14, 18, 22 hpf
+Idents(data.combined_subset2) <- "condition" 
+cell_values <- c("WT14", "WT18", "WT22")
+data.combined_subset3 <- subset(x = data.combined_subset2, idents = cell_values, invert = FALSE)
+
+DimPlot(data.combined_subset3, label = F, label.size = 10, repel = 0.1, pt.size = 1)+
+  coord_equal()+scale_x_reverse()
+
+DimPlot(data.combined_subset3, label = F, label.size = 10, repel = 0.1, pt.size=1, split.by = "condition")+
+  coord_equal()+scale_x_reverse()
+
+
+
+```
+## Marker expression analysis
+
+```{r}
+#data.combined_subset2 <- readRDS(file="outputs/data.combined_subset2.rds")
+#neural progenitors
+DefaultAssay(data.combined_subset2) <- "RNA"
+neurog1 <- FeaturePlot(data.combined_subset2, features = c('neurog1'), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/neurog1.jpeg", neurog1, dpi = 600)
+
+#neurons
+snap25b <- FeaturePlot(data.combined_subset2, features = c('snap25b'), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/snap25b.jpeg", snap25b, dpi = 600)
+
+#pioneer and follower markers
+rpz5 <- FeaturePlot(data.combined_subset2, features = c("rpz5"), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/rpz5.jpeg", rpz5, dpi = 600)
+
+ret <- FeaturePlot(data.combined_subset2, features = c("ret"), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/ret.jpeg", ret, dpi = 600)
+
+zfhx3 <- FeaturePlot(data.combined_subset2, features = c("zfhx3"), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/zfhx3.jpeg", zfhx3, dpi = 600)
+
+hoxb5a <- FeaturePlot(data.combined_subset2, features = c('hoxb5a'), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/hoxb5a.jpeg", hoxb5a, dpi = 600)
+
+nr2f2 <- FeaturePlot(data.combined_subset2, features = c('nr2f2'), order = T,
+            min = 0.1,
+            pt.size = 2)+
+  coord_equal()+scale_x_reverse()
+ggsave("outputs/nr2f2.jpeg", nr2f2, dpi = 600)
+
+
+#Violoin plot for RA genes
+data("data.combined_subset2")
+ra_genes <- c("crabp1b", "hoxb3a",  "hoxb5a",  "nr2f2",   "zfhx3" )
+ra_genes_vinplot <- VlnPlot(object = data.combined_subset2, features = ra_genes, group.by = "condition") + scale_size(range = c(5, 10)) &  stat_summary(fun.y = "mean", geom='point', size = 10, colour = "black", shape = 95)
+
+ggsave("outputs/ra_genes_vinplot.jpeg", ra_genes_vinplot, dpi = 600,  width = 250,
+  height = 200, units = "mm")
+```
+
+
+# pseudotime analysis using Monocle for 14-48 hpf subset
+```{r}
+
+# ...1 Convert to cell_data_set object ------------------------
+
+
+#pll.subset <- subset(data.combined_subset2, subset = integrated_snn_res.0.2 %in% c(0,2,3))
+
+pllg.cds <- new_cell_data_set(expression_data = data.combined_subset2@assays$RNA@counts,
+                              cell_metadata = data.combined_subset2@meta.data)
+
+# Fix gene_name and gene_short_name to enable gene expression plots. Solution from: https://github.com/cole-trapnell-lab/monocle3/issues/438
+rowData(pllg.cds)$gene_name <- rownames(pllg.cds)
+rowData(pllg.cds)$gene_short_name <- rowData(pllg.cds)$gene_name
+
+
+# to get counts
+counts(pllg.cds)
+
+
+# ...2. Cluster cells (using clustering info from seurat's UMAP)---------------------------
+# let's use the clustering information have
+
+# assign paritions
+reacreate.partition <- c(rep(1,length(pllg.cds@colData@rownames)))
+names(reacreate.partition) <- pllg.cds@colData@rownames
+reacreate.partition <- as.factor(reacreate.partition)
+
+
+pllg.cds@clusters$UMAP$partitions <- reacreate.partition
+
+# Assign the cluster info 
+
+list_cluster <- data.combined_subset2@active.ident
+pllg.cds@clusters$UMAP$clusters <- list_cluster
+
+
+# Assign UMAP coordinate - cell embeddings
+
+pllg.cds@int_colData@listData$reducedDims$UMAP <- data.combined_subset2@reductions$umap@cell.embeddings
+
+
+# plot
+cluster.before.trajectory <- plot_cells(pllg.cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           group_label_size = 5) +
+  theme(legend.position = "right")
+
+
+# ...3. Learn trajectory graph ------------------------
+pllg.cds <- learn_graph(pllg.cds, use_partition = FALSE)
+
+plot_cells(pllg.cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           label_branch_points = FALSE,
+           label_roots = FALSE,
+           label_leaves = FALSE,
+           group_label_size = 5)
+
+
+# ...4. Order the cells in pseudotime -------------------
+
+# Write function to extract an ordered vector (highest to lowest) of cell expression for a particular gene
+
+gene_order <- function(seurat_object = NA,
+                       gene_name = NA,
+                       decreasing = TRUE,
+                       layer = 'data',
+                       assay = 'RNA'){
+  if(is.na(seurat_object)){
+    print('Error - Seurat object not provided')
+  }
+  if(is.na(gene_name)){
+    print('Error - Gene name not provided')
+  }
+  
+  if(! is.na(seurat_object) & ! is.na(gene_name)){
+    data_mat <- GetAssayData(object = seurat_object,
+                             layer = layer,
+                             assay = assay)[gene_name,]
+    data_sort <- sort(data_mat,
+                      decreasing = decreasing)
+  }
+  
+}
+
+# Get cell expression ordered by neurod1
+neurog1_order <- gene_order(seurat_object = data.combined_subset2,
+                            gene_name = 'neurog1')
+
+# Pull the cell with highest expression
+highest_exp_cell <- names(neurog1_order)[1]
+
+# Order pseudotime rooted at highest expression of neurog1
+pllg.cds <- order_cells(pllg.cds, reduction_method = 'UMAP', root_cells = highest_exp_cell)
+
+
+# cells ordered by monocle3 pseudotime
+
+pseudotime(pllg.cds)
+pllg.cds$monocle3_pseudotime <- pseudotime(pllg.cds)
+data.pseudo <- as.data.frame(colData(pllg.cds))
+
+ggplot(data.pseudo, aes(monocle3_pseudotime, reorder(condition, monocle3_pseudotime, median), fill = condition)) +
+  geom_violin()+ geom_point(position = position_jitter(seed = .5, width = 0.1))
+
+
+# visualizing pseudotime in seurat
+
+data.combined_subset2$pseudotime <- pseudotime(pllg.cds)
+data.combined.subset2.meta <- data.combined_subset2@meta.data
+pseudotime <- FeaturePlot(data.combined_subset2, features = "pseudotime", label = F)+
+  coord_equal() + scale_x_reverse() & scale_color_viridis_c() 
+ggsave("outputs/pseudotime.jpeg", pseudotime, dpi = 600)
+
+#save seurat subset2 object
+#saveRDS(data.combined_subset2,                   file="outputs/data.combined_subset2.rds")
+
+```
+
+# pseudotime analysis using Monocle for 14-22 hpf subset
+```{r}
+
+# ...1 Convert to cell_data_set object ------------------------
+
+
+#pll.subset <- subset(data.combined_subset2, subset = integrated_snn_res.0.2 %in% c(0,2,3))
+
+pllg2.cds <- new_cell_data_set(expression_data = data.combined_subset3@assays$RNA@counts,
+                              cell_metadata = data.combined_subset3@meta.data)
+
+# Fix gene_name and gene_short_name to enable gene expression plots. Solution from: https://github.com/cole-trapnell-lab/monocle3/issues/438
+rowData(pllg2.cds)$gene_name <- rownames(pllg2.cds)
+rowData(pllg2.cds)$gene_short_name <- rowData(pllg2.cds)$gene_name
+
+
+# to get counts
+counts(pllg2.cds)
+
+
+# ...2. Cluster cells (using clustering info from seurat's UMAP)---------------------------
+# let's use the clustering information have
+
+# assign paritions
+reacreate.partition <- c(rep(1,length(pllg2.cds@colData@rownames)))
+names(reacreate.partition) <- pllg2.cds@colData@rownames
+reacreate.partition <- as.factor(reacreate.partition)
+
+
+pllg2.cds@clusters$UMAP$partitions <- reacreate.partition
+
+# Assign the cluster info 
+
+list_cluster <- data.combined_subset3@active.ident
+pllg2.cds@clusters$UMAP$clusters <- list_cluster
+
+
+# Assign UMAP coordinate - cell embeddings
+
+pllg2.cds@int_colData@listData$reducedDims$UMAP <- data.combined_subset3@reductions$umap@cell.embeddings
+
+
+# plot
+cluster.before.trajectory <- plot_cells(pllg2.cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           group_label_size = 5) +
+  theme(legend.position = "right")
+
+
+# ...3. Learn trajectory graph ------------------------
+pllg2.cds <- learn_graph(pllg2.cds, use_partition = FALSE)
+
+plot_cells(pllg2.cds,
+           color_cells_by = 'cluster',
+           label_groups_by_cluster = FALSE,
+           label_branch_points = FALSE,
+           label_roots = FALSE,
+           label_leaves = FALSE,
+           group_label_size = 5)
+
+
+# ...4. Order the cells in pseudotime -------------------
+
+# Write function to extract an ordered vector (highest to lowest) of cell expression for a particular gene
+
+gene_order <- function(seurat_object = NA,
+                       gene_name = NA,
+                       decreasing = TRUE,
+                       layer = 'data',
+                       assay = 'RNA'){
+  if(is.na(seurat_object)){
+    print('Error - Seurat object not provided')
+  }
+  if(is.na(gene_name)){
+    print('Error - Gene name not provided')
+  }
+  
+  if(! is.na(seurat_object) & ! is.na(gene_name)){
+    data_mat <- GetAssayData(object = seurat_object,
+                             layer = layer,
+                             assay = assay)[gene_name,]
+    data_sort <- sort(data_mat,
+                      decreasing = decreasing)
+  }
+  
+}
+
+# Get cell expression ordered by neurod1
+neurog1_order <- gene_order(seurat_object = data.combined_subset3,
+                            gene_name = 'neurog1')
+
+# Pull the cell with highest expression
+highest_exp_cell <- names(neurog1_order)[1]
+
+# Order pseudotime rooted at highest expression of neurog1
+pllg2.cds <- order_cells(pllg2.cds, reduction_method = 'UMAP', root_cells = highest_exp_cell)
+
+
+# cells ordered by monocle3 pseudotime
+
+pseudotime(pllg2.cds)
+pllg2.cds$monocle3_pseudotime <- pseudotime(pllg2.cds)
+data.pseudo <- as.data.frame(colData(pllg2.cds))
+
+ggplot(data.pseudo, aes(monocle3_pseudotime, reorder(condition, monocle3_pseudotime, median), fill = condition)) +
+  geom_violin()
+
+
+# visualizing pseudotime in seurat
+
+data.combined_subset3$pseudotime <- pseudotime(pllg2.cds)
+data.combined.subset3.meta <- data.combined_subset3@meta.data
+pseudotime2 <- FeaturePlot(data.combined_subset3, features = "pseudotime", label = F)+
+  coord_equal() + scale_x_reverse() & scale_color_viridis_c() 
+ggsave("outputs/pseudotime2.jpeg", pseudotime2, dpi = 600)
+
+#save seurat subset3 object
+#saveRDS(data.combined_subset2,                   file="outputs/data.combined_subset2.rds")
+
+key_genes <- c("neurog1", "snap25b", "zfhx3", "nr2f2", "ret", "rpz5")
+key_genes <- factor(key_genes, levels = key_genes)
+subset_pllg.cds <- pllg2.cds[rowData(pllg2.cds)$gene_short_name %in% key_genes,]
+pseudotime_plots <- plot_genes_in_pseudotime(subset_pllg.cds,
+                         color_cells_by = 'seurat_clusters',
+                         min_expr = 0.5)
+
+
+```
+
+##co-expression for 14-22 hpf
+```{r}
+#co-expression
+VlnPlot(object = data.combined_subset3, features = c('ntrk1', "nr2f2"), slot = 'counts',split.by = 'condition') & geom_hline(yintercept = 3, size = 1)
+
+VlnPlot(object = data.combined_subset3, features = c("ret", "zfhx3"), slot = 'counts', split.by = 'condition') & geom_hline(yintercept = 3, size = 1) 
+
+ntrk1_nr2f2 <- FeaturePlot(data.combined_subset3,
+            features = c('ntrk1', 'nr2f2'),
+            blend = TRUE,
+            order = T,
+            min.cutoff = 0,
+            max.cutoff = 3,
+            slot = 'counts',
+            pt.size = 1,   cols = c('gray60','yellow','magenta')) & NoAxes() &
+  coord_equal() & DarkTheme()& scale_x_reverse()
+ggsave("outputs/ntrk1_nr2f2.jpeg", ntrk1_nr2f2, dpi = 600)
+
+
+ret_zfhx3 <- FeaturePlot(data.combined_subset3,
+            features = c('ret', 'zfhx3'),
+            blend = TRUE,
+            order = T,
+            min.cutoff = 0,
+            max.cutoff = 3,
+            slot = 'counts',
+            pt.size = 1,   cols = c('gray60','yellow','magenta')) & NoAxes() &
+  coord_equal() & DarkTheme() & scale_x_reverse()
+ggsave("outputs/ret_zfhx3.jpeg", ret_zfhx3, dpi = 600)
+
+#cells that co-express ntrk1 and nr2f2
+ntrk1.cutoff <- 3
+nr2f2.cutoff <- 3
+length(which(FetchData(data.combined_subset3, vars ='ntrk1',  slot = 'counts') >= ntrk1.cutoff))
+length(which(FetchData(data.combined_subset3, vars ='nr2f2',  slot = 'counts') >= nr2f2.cutoff))
+length(which(FetchData(data.combined_subset3, vars ='ntrk1',  slot = 'counts') >= ntrk1.cutoff & FetchData(data.combined_subset3, vars ='nr2f2',  slot = 'counts') >= nr2f2.cutoff))
+
+ret.cutoff <- 3
+zfhx3.cutoff <- 3
+length(which(FetchData(data.combined_subset3, vars ='ret',  slot = 'counts') >= ret.cutoff))
+length(which(FetchData(data.combined_subset3, vars ='zfhx3',  slot = 'counts') >= zfhx3.cutoff))
+length(which(FetchData(data.combined_subset3, vars ='ret',  slot = 'counts') >= ret.cutoff & FetchData(data.combined_subset3, vars ='zfhx3',  slot = 'counts') >= zfhx3.cutoff))
+
+```
+
+## pioneer and follower signature
+
+```{r}
+DefaultAssay(data.combined_subset3) <- 'RNA'
+#list of top 20 pioneer DE genes from the supplemental table
+pioneers.to.plot <- c("ntrk1",
+                      "ret",
+                      "rpz5",
+                      "gfra1a",     
+"arid3c",
+"adarb1a",
+"ntng1a",
+"ngfra" ,    
+ "bnc2",
+"CABZ01074363.1",
+"jag1b",        
+"hmx4",    
+ "KHDRBS3",
+"vsnl1a",        
+"pacsin1b",
+"ptprga", 
+"cspg5a",
+"atp1a1a.1",
+"b3gnt7",
+"ptgir",
+"hoxb6b")
+
+DotPlot(data.combined_subset3, assay = "RNA", features = pioneers.to.plot, dot.scale = 10, col.min = 0, group.by = "condition") + 
+    RotatedAxis()
+#list of top 20 DE follower genes from the supplemental table
+followers.to.plot <- c('zfhx3',
+'ntrk3a',
+'nr2f2',
+'kctd12.2',
+'s100s',
+'crabp1b',
+'tpst1',
+'sfrp1a',
+'svila',
+'ptpn13',
+'kirrel3l',
+'zgc:158291',
+'capga',
+'si:ch211-152c2.3',
+'tlx3b',
+'enc1',
+'tbx2b',
+'abhd15a',
+'lrp8',
+'mafba' )
+
+DotPlot(data.combined_subset3, assay = "RNA", features = followers.to.plot, dot.scale = 10, col.min = 0, group.by = "condition") + 
+    RotatedAxis()
+
+
+data.combined_subset2 <- AddModuleScore(data.combined_subset2,
+                  features = list(pioneers.to.plot),
+                  name="pioneer_")
+FeaturePlot(data.combined_subset2,
+            features = "pioneer_1", label = F, repel = TRUE,
+            pt.size = 3)+
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu")))
+
+data.combined_subset2 <- AddModuleScore(data.combined_subset2,
+                  features = list(followers.to.plot),
+                  name="follower_")
+
+FeaturePlot(data.combined_subset2,
+            features = "follower_1", label = F, repel = TRUE, pt.size = 3)+
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu")))
+
+#module score for just 14-22 hpf
+data.combined_subset3 <- AddModuleScore(data.combined_subset3,
+                  features = list(pioneers.to.plot),
+                  name="pioneer_")
+FeaturePlot(data.combined_subset3,
+            features = "pioneer_1", label = F, repel = TRUE,
+            pt.size = 3)+
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu")))
+
+data.combined_subset3 <- AddModuleScore(data.combined_subset3,
+                  features = list(followers.to.plot),
+                  name="follower_")
+
+FeaturePlot(data.combined_subset3,
+            features = c("follower_1"), label = F, repel = TRUE, pt.size = 3)+
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu")))
+
+FeaturePlot(data.combined_subset3,
+            features = c("pioneer_1", "follower_1"), label = F, repel = TRUE, pt.size = 3, keep.scale = "all") &
+            scale_colour_gradientn(colours = rev(brewer.pal(n = 11, name = "RdBu")))&coord_equal()
+
+gene_signature <- FeaturePlot(data.combined_subset3,
+            features = c("pioneer_1", "follower_1"), label = F, repel = TRUE,
+            pt.size = 1, keep.scale = "all", cols = brewer.pal(n = 9, name = "BuPu"))+coord_equal() & scale_x_reverse()
+ggsave("outputs/gene_signature.jpeg", gene_signature, dpi = 600)
+
+FeaturePlot(data.combined_subset2,
+            features = c("pioneer_1", "follower_1"), label = F, repel = TRUE,
+            pt.size = 2, keep.scale = "all", cols = brewer.pal(n = 9, name = "BuPu"))+coord_equal() & scale_x_reverse()
+
+#VlnPlot(data.combined_subset2, features = c("pioneer_1", "follower_1"), split.by = "condition", same.y.lims =1)
+
+
+```
+
+
+## Gene expression versus pseudotime plots
+```{r}
+
+
+key_genes <- c("neurog1", "snap25b", "zfhx3", "nr2f2", "ret", "rpz5")
+key_genes <- factor(key_genes, levels = key_genes)
+subset_pllg.cds <- pllg.cds[rowData(pllg.cds)$gene_short_name %in% key_genes,]
+pseudotime_plots <- plot_genes_in_pseudotime(subset_pllg.cds,
+                         color_cells_by = 'integrated_snn_res.0.2',
+                         min_expr = 0.5) + scale_color_manual(values = c('deepskyblue2','darkorange1','darkmagenta')) 
+ggsave("outputs/pseudotime_plots.jpeg", pseudotime_plots, dpi = 600)
+
+```
+
+
+# SessionInfo
+```{r}
+sessionInfo()
+```
+
+
+
+
+
