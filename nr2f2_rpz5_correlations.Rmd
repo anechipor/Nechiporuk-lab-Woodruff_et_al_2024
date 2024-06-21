@@ -1,0 +1,125 @@
+---
+title: "nr2f2 rpz5 Correlations"
+author: "Ben Woodruff"
+date: "2/24/2021"
+output:
+  html_document:
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_float:
+      collapsed: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, fig.height = 8, fig.width = 8)
+```
+
+# Packages
+```{r message = FALSE}
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(readr)
+library(corrplot)
+library(readxl)
+```
+
+# Load and view data
+```{r}
+nr2f2_rpz5 <- read_csv("data/nr2f2_rpz5.csv")
+names(nr2f2_rpz5)
+```
+
+# Remove double 0 values
+```{r}
+nr2f2_rpz5_nozero = filter(nr2f2_rpz5, nr2f2_dots >"0" | rpz5_dots > "0")
+nr2f2_rpz5_nozero
+```
+
+# View raw data as scatterplot
+```{r}
+ggplot(nr2f2_rpz5_nozero, aes(x = rpz5_dots, 
+                     y = nr2f2_dots, 
+                     color = Sample)) +
+  geom_jitter(size = 2, alpha = .6, width = 0.2) +
+    geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "rpz5 Puncta per Cell", 
+       y = "nr2f2 Puncta per Cell",
+       title = "nr2f2 and rpz5 Puncta per Cell")
+
+```
+
+# Binning
+```{r}
+#Find max expression from each sample
+ganglia_max_nr2f2 = nr2f2_rpz5_nozero %>% group_by(Sample) %>% summarise(nr2f2_max = max(nr2f2_dots))
+ganglia_max_rpz5 = nr2f2_rpz5_nozero %>% group_by(Sample) %>% summarise(rpz5_max = max(rpz5_dots))
+nr2f2_ganglia_max = full_join(nr2f2_rpz5_nozero, ganglia_max_nr2f2, by = "Sample")
+nr2f2_rpz5_max = full_join(nr2f2_ganglia_max, ganglia_max_rpz5, by = "Sample")
+
+#Add proportion columns
+nr2f2_rpz5_props = mutate(nr2f2_rpz5_max, nr2f2_prop = nr2f2_dots/nr2f2_max) %>% 
+  mutate(nr2f2_rpz5_max, rpz5_prop = rpz5_dots/rpz5_max)
+
+#Binning
+binned_nr2f2_rpz5 <- nr2f2_rpz5_props %>%
+  mutate(
+    binned_nr2f2 = case_when(
+      nr2f2_prop <= 0.15 ~ "0", 
+      nr2f2_prop > 0.15 & nr2f2_prop <= 0.25 ~ "1",
+      nr2f2_prop > 0.25 & nr2f2_prop <= 0.3 ~ "2",
+      nr2f2_prop > 0.3 & nr2f2_prop <= 0.35 ~ "3",
+      nr2f2_prop > 0.35 & nr2f2_prop <= 0.45 ~ "4",
+      nr2f2_prop > 0.45 & nr2f2_prop <= 0.55 ~ "5",
+      nr2f2_prop > 0.55 & nr2f2_prop <= 0.65 ~ "6",
+      nr2f2_prop > 0.65 & nr2f2_prop <= 0.75 ~ "7",
+      nr2f2_prop > 0.75 & nr2f2_prop <= 0.8 ~ "8",
+      nr2f2_prop > 0.8 & nr2f2_prop <= 0.9 ~ "9",
+      nr2f2_prop > 0.9 ~ "10")
+    ) %>% 
+  mutate(
+    binned_rpz5 = case_when(
+      rpz5_prop <= 0.15 ~ "0", 
+      rpz5_prop > 0.15 & rpz5_prop <= 0.25 ~ "1",
+      rpz5_prop > 0.25 & rpz5_prop <= 0.3 ~ "2",
+      rpz5_prop > 0.3 & rpz5_prop <= 0.35 ~ "3",
+      rpz5_prop > 0.35 & rpz5_prop <= 0.45 ~ "4",
+      rpz5_prop > 0.45 & rpz5_prop <= 0.55 ~ "5",
+      rpz5_prop > 0.55 & rpz5_prop <= 0.65 ~ "6",
+      rpz5_prop > 0.65 & rpz5_prop <= 0.75 ~ "7",
+      rpz5_prop > 0.75 & rpz5_prop <= 0.8 ~ "8",
+      rpz5_prop > 0.8 & rpz5_prop <= 0.9 ~ "9",
+      rpz5_prop > 0.9 ~ "10")
+    )
+
+
+#Convert Characters to Numeric
+binned_nr2f2_rpz5$binned_rpz5 <- as.numeric(as.character(binned_nr2f2_rpz5$binned_rpz5))
+binned_nr2f2_rpz5$binned_nr2f2 <- as.numeric(as.character(binned_nr2f2_rpz5$binned_nr2f2))
+
+binned_nr2f2_rpz5
+
+#Plot
+
+ggplot(binned_nr2f2_rpz5, aes(x = binned_rpz5, 
+                     y = binned_nr2f2, 
+                     )) +
+  ggthemes::theme_clean() +
+  scale_x_continuous(breaks = seq(0, 10, by = 1)) +
+  scale_y_continuous(breaks = seq(0, 10, by = 1)) +
+  geom_jitter(width = .2, height = .2)+
+  labs(x = "rpz5 Puncta Per Cell (binned)", 
+
+              y = "nr2f2 Puncta Per Cell (binned)",
+       title = "nr2f2 and rpz5 Expression") 
+```
+
+# Kendall Correlations
+```{r, error = TRUE}
+#Kendall's Correlation
+binned_nr2f2_rpz5_corr = cor.test(binned_nr2f2_rpz5$binned_rpz5, binned_nr2f2_rpz5$binned_nr2f2, method="kendall")
+binned_nr2f2_rpz5_corr
+```

@@ -1,0 +1,49 @@
+---
+title: "Taus"
+author: "Ben Woodruff"
+date: "6/17/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, fig.height = 8, fig.width = 8)
+```
+
+# Packages
+```{r message = FALSE}
+library(tidyverse)
+library(corrplot)
+library(readxl)
+library(RColorBrewer)
+```
+
+# Load and view data
+```{r}
+taus <- read.csv("data/taus.csv", row.names = 1)
+taus
+```
+
+# Convert data to matrix
+```{r}
+#data needs to be matrix format for corrplot() to work
+taus =as.matrix(taus)
+```
+
+# Correlation heatmap
+```{r, error = TRUE}
+#Plot all Kendall coefficients
+corrplot(taus, 
+         is.corr = FALSE,
+         method = "color", 
+         na.label = "-", 
+         type = "upper", 
+         tl.col = "black",
+         col.lim = c(-1,1),
+         tl.srt = 40,
+         col = COL2('RdBu', n = 10))
+```
+
+
+
