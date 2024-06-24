@@ -1,4 +1,5 @@
-WT_14_18_22_30_48hpf_Woofruff 6-4-24.Rmd: R code for the analysis of time series
+WT_30hpf_Woodruff 6-21-24.Rmd: R code for analysis of 30 hpf
+WT_14_18_22_30_48hpf_Woofruff 6-4-24.Rmd: R code for analysis of time series
 nr2f2_rpz5.csv: RNA Scope expression data from 30 hpf
 nr2f2_rpz5_correlations.Rmd: example of Kendall tau correlation coefficient calculation for two genes
 taus.csv: table of Kendall Tau correlation coefficients for comparison of pairwise gene expression
