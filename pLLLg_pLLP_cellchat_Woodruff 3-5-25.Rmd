@@ -1,0 +1,466 @@
+---
+title: "cellchat: skin versus RB neurons"
+authors: "Nick Calistri (calistri@ohsu.edu) & Alex Nechiporuk" 
+date: "2024-04-02"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    thumbnails: true
+    lightbox: true
+    gallery: true
+    highlight: tango
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set up
+
+
+## Load libraries
+```{r}
+library(tidyverse)
+library(Seurat)
+library(CellChat)
+```
+
+ 
+ 
+ 
+
+## Load data
+
+```{r}
+pLLg <- readRDS('30h_pioneers_followers.rds')
+
+pLLP <- readRDS('pLLP.rds')
+
+```
+
+
+
+## Visualize Suerat object
+
+```{r}
+DimPlot(pLLg,
+        label = TRUE)+
+  coord_equal()
+FeaturePlot(pLLg, features = c('hoxb5b', "ret"), order = T,
+            min = 0.1,
+            pt.size = 1)+ NoAxes()+coord_equal()
+
+
+DimPlot(pLLP,
+        label = TRUE)+
+  coord_equal()
+
+FeaturePlot(pLLP, features = c('hmx2'), order = T,
+            min = 0.1,
+            pt.size = 1)+ NoAxes()+coord_equal()
+
+
+```
+
+
+## Adjust metadata and convert to dietSeurat
+
+```{r}
+pLLg@meta.data$celltype <- paste0('pLLg_', Idents(pLLg))
+pLLP@meta.data$celltype <- paste0('pLLP_', Idents(pLLP))
+
+DefaultAssay(pLLg) <- 'RNA'
+
+ds_pLLg <- DietSeurat(pLLg,
+                      assays = 'RNA')
+ds_pLLP <- DietSeurat(pLLP,
+                      assays = 'RNA')
+```
+
+
+##Merge objects
+```{r}
+data.combined <- merge(x = ds_pLLg, y = ds_pLLP, add.cell.ids = c("pLLg", "pLLP"), project = "data.combined")
+
+data.combined[['condition']] <- str_split(data.combined@meta.data$orig.ident, pattern = '_', simplify = TRUE)[,1]
+head(colnames(data.combined))
+table(data.combined$orig.ident)
+
+data.combined.meta <- data.combined@meta.data
+
+Idents(data.combined) <- 'celltype'
+```
+
+
+```{r}
+data.combined[["percent.mt"]] <- PercentageFeatureSet(data.combined, pattern = "^mt-|^COX3$")
+# Visualize QC metrics as a violin plot
+VlnPlot(data.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+
+```
+
+## normalize data with SCTransform
+
+```{r}
+data.combined <- SCTransform(data.combined)
+
+# Note: 08/19/24 NLC - Commenting out this section and switching to using SCTransform due to read-depth disparity between pLLg and pLLP data sets
+
+# data.combined <- NormalizeData(data.combined)
+# data.combined <- FindVariableFeatures(data.combined, selection.method = 'vst', nfeatures = 2000)
+# top10_variablefeatures <- head(VariableFeatures(data.combined), 10)
+# 
+# var_feature_plot <- VariableFeaturePlot(data.combined)
+# var_feature_plot <- LabelPoints(plot = var_feature_plot, points = top10_variablefeatures, repel = TRUE)
+# 
+# data.combined <- ScaleData(data.combined, features = rownames(data.combined))
+
+```
+
+```{r}
+data.combined <- RunPCA(data.combined)
+VizDimLoadings(data.combined, dims = 1:4, reduction = 'pca')
+ElbowPlot(data.combined, ndims = 50)+
+  geom_vline(xintercept = 10.5)
+```
+
+```{r}
+data.combined <- FindNeighbors(data.combined, dims = 1:10)
+data.combined <- FindClusters(data.combined, resolution = .1)
+data.combined <- RunUMAP(data.combined, dims = 1:10)
+
+pLLg_pLLP_plot <- DimPlot(data.combined, label = F, label.size = 5, group.by = "celltype")+
+  coord_equal()
+ggsave(pLLg_pLLP_plot,  filename =  "pLLg_pLLP_plot.jpeg", dpi = 600, scale = 0.25)
+
+
+data.combined.meta <- data.combined@meta.data
+#saveRDS(data.combined, "data.combined.rds")
+```
+
+##
+```{r}
+
+hmx2 <- FeaturePlot(data.combined, features = c("hmx2"), order = T, 
+            min = 0.1,
+            pt.size = 1)+ NoAxes()+coord_equal()
+ggsave(hmx2,  filename =  "hmx2.jpeg", dpi = 600, scale = 0.25)
+
+ret <- FeaturePlot(data.combined, features = c('ret'), order = T,
+            min = 0.1,
+            pt.size = 1)+ NoAxes()+coord_equal()
+ggsave(ret,  filename =  "ret.jpeg", dpi = 600, scale = 0.25)
+
+nr2f2 <- FeaturePlot(data.combined, features = c('nr2f2'), order = T,
+            min = 0.1,
+            pt.size = 1)+ NoAxes()+coord_equal()
+ggsave(nr2f2,  filename =  "nr2f2.jpeg", dpi = 600, scale = 0.25)
+
+
+```
+
+
+## Convert to cellchat
+
+```{r}
+# Extract relevant info from seurat object
+data.input <- data.combined[["SCT"]]@data # normalized data matrix
+# For Seurat version >= “5.0.0”, get the normalized data via `seurat_object[["RNA"]]$data`
+meta <- data.frame(group = data.combined@meta.data$celltype,
+                   row.names = row.names(data.combined@meta.data$celltype))
+
+# Create cellchat object
+cellchat <- createCellChat(object = data.input,
+                           meta = meta,
+                           group.by = 'group')
+
+
+# Add meta data
+cellchat <- addMeta(cellchat, meta = meta, meta.name = 'celltype')
+setIdent(cellchat, ident.use = 'celltype')
+levels(cellchat@idents)
+
+```
+
+## 24/12/1: Update cellchat ligand/receptor dictionary with Teneurin-latrophilin interactions
+
+
+```{r}
+CellChatDB <- CellChatDB.zebrafish
+
+showDatabaseCategory(CellChatDB)
+
+cellchat@DB <- CellChatDB
+```
+
+```{r}
+# Read ligand-receptor data for teneurin-latrophilin interactions
+ten_lat_interaction <- read_csv('teneurin_latrophilin_interaction.csv') %>%
+  as.data.frame()
+
+row.names(ten_lat_interaction) <- ten_lat_interaction$interaction_name
+
+ten_lat_geneInfo <- read_csv('teneurin_latrophilin_geneInfo.csv') %>%
+  as.data.frame()
+
+row.names(ten_lat_geneInfo) <- ten_lat_geneInfo$Symbol
+
+# Copy the cellchatDB
+CellChatDB2 <- CellChatDB.zebrafish
+
+# Combine with regular zebrafish ligand-receptor interaction dictionary
+CellChatDB2$interaction <- rbind(CellChatDB2$interaction,
+                                ten_lat_interaction)
+
+CellChatDB2$geneInfo <- rbind(CellChatDB2$geneInfo,
+                                ten_lat_geneInfo)
+
+cellchat@DB <- CellChatDB2
+```
+
+
+## Preprocess the expression data (does not project via ppi due to missing zebrafish ppi)
+
+```{r}
+cellchat <- subsetData(cellchat)
+
+future::plan('multisession', workers = 6)
+
+```
+
+## Compute communication probability
+
+```{r}
+if(file.exists('241201_cellchat_pLLg_pLLP.rds')){
+  print('Loading saved cellchat object')
+  cellchat <- readRDS('241201_cellchat_pLLg_pLLP.rds')
+}else{
+  print('Computing cellchat interactions, ETA: ~15min')
+  # Identify overexpressed genes and interactions
+  cellchat <- identifyOverExpressedGenes(cellchat)
+  cellchat <- identifyOverExpressedInteractions(cellchat)
+  
+  # Compute communication probability
+  cellchat <- computeCommunProb(cellchat, raw.use = TRUE)
+  cellchat <- filterCommunication(cellchat, min.cells = 10)
+  
+  # Infer the cell-cell communication at signaling pathway level
+  cellchat <- computeCommunProbPathway(cellchat)
+  
+  #Calculate aggregate cell-cell communication network
+  cellchat <- aggregateNet(cellchat)
+  
+  saveRDS(cellchat, '241201_cellchat_pLLg_pLLP.rds')
+}
+
+```
+
+# Visualize output
+
+## Overall network
+```{r}
+groupSize <- as.numeric(table(cellchat@idents))
+
+par(mfrow = c(1,2), xpd = TRUE)
+
+netVisual_circle(cellchat@net$count, vertex.weight = groupSize, weight.scale = TRUE, label.edge = FALSE, title.name = 'Number of interactions')
+
+netVisual_circle(cellchat@net$weight, vertex.weight = groupSize, weight.scale = TRUE, label.edge = FALSE, title.name = 'Interaction weights/strength')
+
+```
+
+### Network by cluster
+
+```{r}
+mat <- cellchat@net$weight
+par(mfrow = c(2,3), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, label.edge = TRUE, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+```
+
+## Network heatmap
+
+```{r, fig.asp = 1}
+bubble <- netVisual_bubble(cellchat, sources.use = c(2), targets.use = c(1), signaling = c("NCAM", "Teneurin-latrophilin", "CDH", "CADM", "NGL", "EPHB", "L1CAM", "NEGR", "SEMA6", "CNTN", "GRN", "MPZ", "NGF", "GDNF"), remove.isolate = FALSE)
+
+bubble_plot <- ggsave(bubble,  filename = "bubble_plot.jpeg", dpi = 600, scale = 0.25)
+
+# Use netvisual_bubble function to pull data with "return.data" argument
+
+bubble_plot <- netVisual_bubble(cellchat,
+                 sources.use = c(2),
+                 targets.use = c(1), 
+                 signaling = c("NCAM", "Teneurin-latrophilin", "CDH", "CADM", "NGL", "EPHB", "L1CAM", "NEGR", "SEMA6", "CNTN", "GRN", "MPZ", "NGF", "GDNF"),
+                 return.data = TRUE)
+
+# Arrange bubble data by probability
+bubble_dat <- bubble_plot$communication %>%
+  arrange(desc(prob))
+
+# Generate bubbleplot with custom order
+
+netVisual_bubble(cellchat,
+                 sources.use = c(2),
+                 targets.use = c(1), 
+                 pairLR.use = data.frame(interaction_name = bubble_dat$interaction_name))
+
+# Reversed order
+bubble <- netVisual_bubble(cellchat,
+                 sources.use = c(2),
+                 targets.use = c(1), 
+                  font.size = 12,
+                 pairLR.use = data.frame(interaction_name = rev(bubble_dat$interaction_name)))
+
+ordered_bubble_plot <- ggsave(bubble,  filename = "ordered_bubble_plot.jpeg", dpi = 600)
+  
+
+```
+
+## Chord plots (focus on cluster 1 & 2)
+
+```{r}
+netVisual_chord_gene(cellchat, sources.use = c(2), targets.use = c(1), lab.cex = 1, legend.pos.y = 30)
+```
+
+# Systems analysis of interaction
+
+## centrality
+
+```{r}
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP") # the slot 'netP' means the inferred intercellular communication network of signaling pathways
+# Visualize the computed centrality scores using heatmap, allowing ready identification of major signaling roles of cell groups
+netAnalysis_signalingRole_network(cellchat, width = 8, height = 2.5, font.size = 10)
+```
+
+## Visualize dominant senders and receivers
+
+```{r}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+gg1 <- netAnalysis_signalingRole_scatter(cellchat)
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+# Signaling role analysis on the cell-cell communication networks of interest
+gg2 <- netAnalysis_signalingRole_scatter(cellchat, signaling = c('Teneurin-latrophilin', "MK", "LAMININ","AGRN", "NGL", "EPHB", "THBS", "CDH", "PTN", "IGF", "ANGPTL", "TENASCIN", 
+         "SEMA3", "BMP", "EPHA", "CXCL", "FGF", "NOTCH", "GAS", "MIF", "PROS", "TRAIL"))
+#> Signaling role analysis on the cell-cell communication network from user's input
+
+gg1
+
+gg2
+```
+
+## Identify dominant incoming/outgoing signals
+
+```{r, fig.asp = 1}
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+ht1 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", width = 5)
+
+ht2 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", width = 5)
+
+ht1
+
+ht2
+
+ht1+ht2
+
+outgoing <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", width = 5, signaling = c("NCAM", "Teneurin-latrophilin", "CDH", "CADM", "NGL", "EPHB", "L1CAM", "NEGR", "SEMA6", "CNTN", "GRN", "MPZ", "NGF", "GDNF"))
+
+
+
+incoming <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", width = 5, signaling = c("NCAM", "Teneurin-latrophilin", "CDH", "CADM", "NGL", "EPHB", "L1CAM", "NEGR", "SEMA6", "CNTN", "GRN", "MPZ", "NGF", "GDNF"))
+
+
+
+outgoing+incoming
+
+
+```
+## Identify patterns of signal
+
+### load libraries
+```{r}
+library(NMF)
+library(ggalluvial)
+```
+
+### Identify outgoing patterns
+
+```{r}
+selectK(cellchat, pattern = 'outgoing')
+
+nPatterns <- 3
+```
+
+```{r}
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "outgoing", k = nPatterns)
+
+netAnalysis_dot(cellchat, pattern = 'outgoing')
+```
+
+
+### Identify incoming patterns
+
+```{r}
+selectK(cellchat, pattern = 'incoming')
+
+nPatterns <- 3
+```
+
+```{r}
+cellchat <- identifyCommunicationPatterns(cellchat, pattern = "incoming", k = nPatterns)
+
+netAnalysis_dot(cellchat, pattern = 'incoming')
+```
+
+# Revisit pathways of interest
+
+## Set pathways of interest
+```{r}
+poi <- c("NCAM", "Teneurin-latrophilin", "CDH", "CADM", "NGL", "EPHB", "L1CAM", "NEGR", "SEMA6", "CNTN", "GRN", "MPZ", "NGF", "GDNF")
+```
+
+## Table of every included interaction
+
+```{r}
+CellChatDB2$interaction %>%
+  filter(pathway_name %in% poi) %>%
+  DT::datatable()
+```
+
+
+## Go through pathway by pathway
+
+
+
+```{r, fig.asp = 1, eval = FALSE}
+
+for(i in poi){
+  na1 <- netAnalysis_signalingRole_network(cellchat, signaling = i , width = 8, height = 2.5, font.size = 10)
+   print(na1)
+   
+  np1 <- netVisual_heatmap(cellchat, signaling = i)
+  print(np1)
+
+  nac1 <- netAnalysis_contribution(cellchat, signaling = i)
+  print(nac1)
+  
+  nb1 <- netVisual_bubble(cellchat, signaling = i, title.name = i)
+  print(nb1)
+  
+  vp1 <- plotGeneExpression(cellchat, signaling = i, type = "violin")
+  print(vp1)
+}
+
+
+```
+
+# sessionInfo()
+
+```{r}
+sessionInfo()
+```
+
