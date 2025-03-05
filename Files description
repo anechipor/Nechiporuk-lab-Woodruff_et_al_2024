@@ -4,3 +4,4 @@ nr2f2_rpz5.csv: RNA Scope expression data from 30 hpf
 nr2f2_rpz5_correlations.Rmd: example of Kendall tau correlation coefficient calculation for two genes
 taus.csv: table of Kendall Tau correlation coefficients for comparison of pairwise gene expression
 tau_matrix.Rmd: code for displaying heatmap of Kendall tau coefficients 
+pLLg_pLLP_cellchat_Woodruff 3-5-25: CellChat analysis of pioneers, followers and posterior lateral line primordium at 30 hpf
